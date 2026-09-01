@@ -38,6 +38,7 @@ const DEFAULT_SETTINGS = {
   articleCols: "G,H,I",
   qtyCol: "J",
   dataStartRow: "2",
+  motivCol: "",
 };
 
 /* ---------------- State ---------------- */
@@ -60,6 +61,9 @@ let logSheetEnsured = false;
 let lastScan = { code: null, at: 0 };
 let currentMode = "camera"; // "camera" | "wedge"
 
+let activeOrder = null;       // { code, order } for a matched order awaiting pallet confirmation, else null
+let checkedLines = new Set(); // article labels checked off for activeOrder
+
 /* ---------------- DOM refs ---------------- */
 
 const el = (id) => document.getElementById(id);
@@ -79,6 +83,7 @@ const orderColInput = el("orderColInput");
 const articleColsInput = el("articleColsInput");
 const qtyColInput = el("qtyColInput");
 const dataStartRowInput = el("dataStartRowInput");
+const motivColInput = el("motivColInput");
 
 const modeCameraBtn = el("modeCameraBtn");
 const modeWedgeBtn = el("modeWedgeBtn");
@@ -98,8 +103,11 @@ const resultCard = el("resultCard");
 const resultBadge = el("resultBadge");
 const resultTracking = el("resultTracking");
 const resultOrder = el("resultOrder");
+const resultProgress = el("resultProgress");
 const resultLines = el("resultLines");
 const resultNote = el("resultNote");
+const confirmRow = el("confirmRow");
+const confirmPalletBtn = el("confirmPalletBtn");
 
 const historyList = el("historyList");
 const clearHistoryBtn = el("clearHistoryBtn");
@@ -123,6 +131,7 @@ function loadSettings() {
       articleCols: parsed.articleCols || DEFAULT_SETTINGS.articleCols,
       qtyCol: parsed.qtyCol || DEFAULT_SETTINGS.qtyCol,
       dataStartRow: parsed.dataStartRow || DEFAULT_SETTINGS.dataStartRow,
+      motivCol: parsed.motivCol || "",
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -187,6 +196,7 @@ settingsBtn.addEventListener("click", () => {
   articleColsInput.value = settings.articleCols;
   qtyColInput.value = settings.qtyCol;
   dataStartRowInput.value = settings.dataStartRow;
+  motivColInput.value = settings.motivCol;
   settingsModal.showModal();
 });
 
@@ -211,6 +221,7 @@ settingsForm.addEventListener("submit", (e) => {
     articleCols: articleColsInput.value.trim() || DEFAULT_SETTINGS.articleCols,
     qtyCol: qtyColInput.value.trim() || DEFAULT_SETTINGS.qtyCol,
     dataStartRow: dataStartRowInput.value.trim() || DEFAULT_SETTINGS.dataStartRow,
+    motivCol: motivColInput.value.trim(), // optional, empty = feature off
   };
   const clientChanged = next.clientId !== settings.clientId;
   saveSettings(next);
@@ -366,6 +377,11 @@ function a1(sheetName) {
   return encodeURIComponent(`'${sheetName.replace(/'/g, "''")}'`);
 }
 
+/** Raw (unencoded) quoted sheet reference, for building a range string before a single encodeURIComponent pass. */
+function rawSheetRef(sheetName) {
+  return `'${String(sheetName).replace(/'/g, "''")}'`;
+}
+
 /** Converts a spreadsheet column letter ("A", "AB", ...) to a zero-based index. */
 function colLetterToIndex(letters) {
   const s = String(letters || "").trim().toUpperCase();
@@ -391,12 +407,39 @@ function formatQty(n) {
 }
 
 /**
+ * Fetches the resolved hyperlink URL (works for both a HYPERLINK() formula
+ * and a native "insert link" rich-text link) for every cell in one column,
+ * via spreadsheets.get with fields=...hyperlink instead of values.get
+ * (which only ever returns display text, never the URL).
+ * Returns a Map<rowIndex (0-based, aligned with the main values array), url>.
+ */
+async function fetchColumnHyperlinks(sheetName, colLetter) {
+  const map = new Map();
+  if (!colLetter) return map;
+  const id = settings.spreadsheetId;
+  const range = `${rawSheetRef(sheetName)}!${colLetter}:${colLetter}`;
+  const fields = "sheets.data.rowData.values.hyperlink";
+  try {
+    const data = await sheetsFetch(`/${id}?ranges=${encodeURIComponent(range)}&fields=${encodeURIComponent(fields)}`);
+    const rowData = data?.sheets?.[0]?.data?.[0]?.rowData || [];
+    rowData.forEach((row, idx) => {
+      const link = row?.values?.[0]?.hyperlink;
+      if (link) map.set(idx, link);
+    });
+  } catch (err) {
+    console.warn("Kunde inte läsa motiv-länkar", err);
+  }
+  return map;
+}
+
+/**
  * Loads the order/line-item sheet into memory and builds two lookups:
  *  - trackingToOrder: spårningsnummer (t.ex. från en HYPERLINK-cell) -> ordernummer
- *  - ordersByNumber:  ordernummer -> { orderNumber, lines: [{label, qty}], rowNumbers }
+ *  - ordersByNumber:  ordernummer -> { orderNumber, lineMap: Map<label,{qty,motivUrl}>, rowNumbers }
  * Rows with the same order number are grouped, and rows sharing the exact
- * same artikel-nyckel (kolumn 7-9 hopslagna) within an order have their
- * antal summerade.
+ * same artikel-nyckel (kolumn 7-9 hopslagna) within an order have sitt
+ * antal summerat. Om en motiv-länkkolumn är satt hämtas även den PDF-länk
+ * (t.ex. till Drive) som hör till varje artikelrad.
  */
 async function loadOrderIndex(force = false) {
   if (orderIndex && !force && Date.now() - orderIndexLoadedAt < 5 * 60 * 1000) {
@@ -404,7 +447,11 @@ async function loadOrderIndex(force = false) {
   }
   const id = settings.spreadsheetId;
   const range = `${a1(settings.productSheet)}`;
-  const data = await sheetsFetch(`/${id}/values/${range}`);
+
+  const [data, motivLinks] = await Promise.all([
+    sheetsFetch(`/${id}/values/${range}`),
+    fetchColumnHyperlinks(settings.productSheet, settings.motivCol),
+  ]);
   const rows = data.values || [];
   if (rows.length === 0) throw new Error(`Fliken "${settings.productSheet}" verkar vara tom.`);
 
@@ -446,8 +493,13 @@ async function loadOrderIndex(force = false) {
       trackingToOrder.set(tracking, orderNumber);
     }
     if (articleLabel) {
-      if (!order.lineMap.has(articleLabel)) order.lineMap.set(articleLabel, 0);
-      order.lineMap.set(articleLabel, order.lineMap.get(articleLabel) + qty);
+      if (!order.lineMap.has(articleLabel)) order.lineMap.set(articleLabel, { qty: 0, motivUrl: null });
+      const entry = order.lineMap.get(articleLabel);
+      entry.qty += qty;
+      if (!entry.motivUrl) {
+        const link = motivLinks.get(i);
+        if (link) entry.motivUrl = link;
+      }
     }
   }
 
@@ -460,7 +512,7 @@ async function loadOrderIndex(force = false) {
 function orderLines(order) {
   if (!order) return [];
   return Array.from(order.lineMap.entries())
-    .map(([label, qty]) => ({ label, qty }))
+    .map(([label, v]) => ({ label, qty: v.qty, motivUrl: v.motivUrl || null }))
     .sort((a, b) => a.label.localeCompare(b.label, "sv"));
 }
 
@@ -481,29 +533,38 @@ async function ensureLogSheet() {
         requests: [{ addSheet: { properties: { title: settings.logSheet } } }],
       }),
     });
-    await sheetsFetch(`/${id}/values/${a1(settings.logSheet)}!A1:E1?valueInputOption=RAW`, {
+    await sheetsFetch(`/${id}/values/${a1(settings.logSheet)}!A1:F1?valueInputOption=RAW`, {
       method: "PUT",
-      body: JSON.stringify({ values: [["Tidpunkt", "Spårningsnummer", "Ordernummer", "Antal artikelrader", "Status"]] }),
+      body: JSON.stringify({ values: [["Tidpunkt", "Spårningsnummer", "Ordernummer", "Antal artikelrader", "Status", "Saknade artiklar"]] }),
     });
   }
   logSheetEnsured = true;
 }
 
-/** Appends one scan event to the log sheet. */
-async function appendLogRow(code, order) {
+/**
+ * Appends one scan/pallet event to the log sheet.
+ *  - order == null            -> "Ingen träff" (spårningsnumret hittades inte)
+ *  - order set, complete=true -> "Fullständig" (alla rader avbockade)
+ *  - order set, complete=false-> "Ofullständig", med de saknade artiklarna listade
+ */
+async function appendLogRow(code, order, complete, missingLabels) {
   await ensureLogSheet();
   const id = settings.spreadsheetId;
   const lines = orderLines(order);
-  const status = order ? "Matchad" : "Ingen träff";
+  let status;
+  if (!order) status = "Ingen träff";
+  else status = complete ? "Fullständig" : "Ofullständig";
+  const missingText = order && !complete && missingLabels ? missingLabels.join("; ") : "";
   const values = [[
     new Date().toLocaleString("sv-SE"),
     code,
     order ? order.orderNumber : "",
     order ? String(lines.length) : "0",
     status,
+    missingText,
   ]];
   await sheetsFetch(
-    `/${id}/values/${a1(settings.logSheet)}!A:E:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+    `/${id}/values/${a1(settings.logSheet)}!A:F:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
     { method: "POST", body: JSON.stringify({ values }) }
   );
 }
@@ -531,18 +592,31 @@ async function handleScannedCode(rawCode, { fromCamera, fromWedge } = {}) {
     return;
   }
 
+  if (activeOrder && activeOrder.code !== code) {
+    showToast(`OBS: föregående pall (order ${activeOrder.order.orderNumber}) bekräftades aldrig och loggades inte.`, "error");
+  }
+
   showResultLoading(code);
 
   try {
     const { trackingToOrder, ordersByNumber } = await loadOrderIndex();
     const orderNumber = trackingToOrder.get(code) || null;
     const order = orderNumber ? ordersByNumber.get(orderNumber) : null;
+
+    activeOrder = order ? { code, order } : null;
+    checkedLines = new Set();
+
     renderResult(code, order);
-    addHistoryItem(code, order);
-    appendLogRow(code, order).catch((err) => {
-      console.error(err);
-      showToast("Träffen visades, men loggning till arket misslyckades.", "error");
-    });
+
+    if (!order) {
+      // Nothing to check off against a pallet - log the miss right away, as before.
+      addHistoryItem(code, null, null);
+      appendLogRow(code, null, null, []).catch((err) => {
+        console.error(err);
+        showToast("Träffen visades, men loggning till arket misslyckades.", "error");
+      });
+    }
+    // If a match was found, logging + history now wait for "Bekräfta pall".
   } catch (err) {
     console.error(err);
     showToast(err.message || "Något gick fel vid uppslag.", "error");
@@ -556,8 +630,14 @@ function showResultLoading(code) {
   resultBadge.className = "badge";
   resultTracking.textContent = code;
   resultOrder.textContent = "–";
+  resultProgress.hidden = true;
   resultLines.innerHTML = "";
   resultNote.textContent = "";
+  confirmRow.hidden = true;
+}
+
+function updateResultProgress(total) {
+  resultProgress.textContent = `Avbockat: ${checkedLines.size} av ${total}`;
 }
 
 function renderResult(code, order) {
@@ -568,37 +648,98 @@ function renderResult(code, order) {
   if (order) {
     const lines = orderLines(order);
     resultBadge.textContent = "Träff";
-    resultBadge.className = "badge match";
+    resultBadge.className = "badge pending";
     resultOrder.textContent = order.orderNumber;
+    confirmRow.hidden = false;
 
     if (lines.length === 0) {
       const li = document.createElement("li");
       li.className = "result-line-empty";
       li.textContent = "Ordern hittades, men inga artikelrader kunde läsas ut.";
       resultLines.appendChild(li);
+      resultProgress.hidden = true;
     } else {
       lines.forEach((line) => {
         const li = document.createElement("li");
         li.className = "result-line";
+
+        const check = document.createElement("label");
+        check.className = "rl-check";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.addEventListener("change", () => {
+          if (cb.checked) checkedLines.add(line.label);
+          else checkedLines.delete(line.label);
+          li.classList.toggle("checked", cb.checked);
+          updateResultProgress(lines.length);
+        });
         const label = document.createElement("span");
         label.className = "rl-label";
         label.textContent = line.label;
+        check.appendChild(cb);
+        check.appendChild(label);
+        li.appendChild(check);
+
+        if (line.motivUrl) {
+          const a = document.createElement("a");
+          a.href = line.motivUrl;
+          a.target = "_blank";
+          a.rel = "noopener";
+          a.className = "rl-motiv";
+          a.textContent = "Se motiv";
+          li.appendChild(a);
+        }
+
         const qty = document.createElement("span");
         qty.className = "rl-qty";
         qty.textContent = formatQty(line.qty) + " st";
-        li.appendChild(label);
         li.appendChild(qty);
+
         resultLines.appendChild(li);
       });
+      resultProgress.hidden = false;
+      updateResultProgress(lines.length);
     }
-    resultNote.textContent = `Order ${order.orderNumber} – ${order.rowNumbers.length} rad(er) i fliken "${settings.productSheet}".`;
+    resultNote.textContent = `Bocka av varje rad när du räknat den på pallen, tryck sedan "Bekräfta pall".`;
   } else {
     resultBadge.textContent = "Ingen träff";
     resultBadge.className = "badge nomatch";
     resultOrder.textContent = "–";
+    resultProgress.hidden = true;
+    confirmRow.hidden = true;
     resultNote.textContent = `Spårningsnumret hittades inte i fliken "${settings.productSheet}". Skanningen loggades ändå.`;
   }
 }
+
+confirmPalletBtn.addEventListener("click", async () => {
+  if (!activeOrder) return;
+  const { code, order } = activeOrder;
+  const lines = orderLines(order);
+  const missing = lines.filter((l) => !checkedLines.has(l.label)).map((l) => l.label);
+  const complete = missing.length === 0;
+
+  addHistoryItem(code, order, complete);
+  confirmPalletBtn.disabled = true;
+  try {
+    await appendLogRow(code, order, complete, missing);
+    showToast(
+      complete ? "Pall bekräftad – fullständig." : `Pall bekräftad – ofullständig (${missing.length} rad(er) saknas).`,
+      complete ? "success" : "error"
+    );
+  } catch (err) {
+    console.error(err);
+    showToast("Kunde inte logga till arket.", "error");
+  } finally {
+    confirmPalletBtn.disabled = false;
+  }
+
+  activeOrder = null;
+  checkedLines = new Set();
+  confirmRow.hidden = true;
+  resultProgress.hidden = true;
+
+  if (currentMode === "camera" && cameraPaused) resumeCameraScanning();
+});
 
 /* ---------------- History (local only, session convenience) ---------------- */
 
@@ -609,13 +750,14 @@ function saveHistory(items) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, MAX_HISTORY)));
 }
 
-function addHistoryItem(code, order) {
+function addHistoryItem(code, order, complete) {
   const items = loadHistory();
   items.unshift({
     tracking: code,
     orderNumber: order ? order.orderNumber : "",
     lineCount: order ? orderLines(order).length : 0,
     matched: Boolean(order),
+    complete: order ? Boolean(complete) : null,
     time: new Date().toISOString(),
   });
   saveHistory(items);
@@ -634,13 +776,16 @@ function renderHistory() {
   }
   items.forEach((item) => {
     const li = document.createElement("li");
-    li.className = "history-item" + (item.matched ? "" : " nomatch");
+    const statusClass = !item.matched ? " nomatch" : (!item.complete ? " incomplete" : "");
+    li.className = "history-item" + statusClass;
     const left = document.createElement("div");
     const name = document.createElement("div");
     name.className = "hi-name";
-    name.textContent = item.matched
-      ? `Order ${item.orderNumber} (${item.lineCount} artikelrad${item.lineCount === 1 ? "" : "er"})`
-      : "Ingen träff";
+    name.textContent = !item.matched
+      ? "Ingen träff"
+      : item.complete
+        ? `Order ${item.orderNumber} – fullständig (${item.lineCount})`
+        : `Order ${item.orderNumber} – ofullständig`;
     const ean = document.createElement("div");
     ean.className = "hi-ean";
     ean.textContent = item.tracking;

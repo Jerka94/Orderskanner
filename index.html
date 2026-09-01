@@ -92,8 +92,12 @@
         <span id="resultOrder" class="meta-value"></span>
       </div>
     </div>
+    <p id="resultProgress" class="result-progress" hidden></p>
     <ul id="resultLines" class="result-lines"></ul>
     <p id="resultNote" class="result-note"></p>
+    <div id="confirmRow" class="confirm-row" hidden>
+      <button id="confirmPalletBtn" class="btn btn-primary">Bekräfta pall</button>
+    </div>
   </section>
 
   <!-- Recent scans -->
@@ -177,6 +181,12 @@
         <input id="dataStartRowInput" type="number" min="1" placeholder="2" value="2">
       </label>
     </div>
+
+    <label class="field">
+      <span>Motiv-länk (valfritt)</span>
+      <input id="motivColInput" type="text" placeholder="T.ex. AC">
+      <small>Kolumn med en länk (t.ex. HYPERLINK till en PDF på Drive) som visas som "Se motiv" på artikelraden. Lämna tomt om ni inte har detta.</small>
+    </label>
 
     <div class="modal-actions">
       <button type="button" id="cancelSettingsBtn" class="btn btn-ghost">Avbryt</button>

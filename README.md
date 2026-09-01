@@ -3,7 +3,9 @@
 En liten webbapp (PWA) som läser av ett spårningsnummer (t.ex. streckkoden på
 en fraktetikett) med mobilkameran eller en handdator, hittar vilken order
 koden hör till i ett Google Sheet, och ställer samman alla artikelrader som
-ingår i den ordern (artikel + antal). Varje skanning loggas tillbaka till
+ingår i den ordern (artikel + antal). Du bockar av varje rad när du räknat
+den på pallen, och trycker sedan **"Bekräfta pall"** — resultatet
+(fullständig eller ofullständig, med ev. saknade artiklar) loggas då till
 arket. Inget konto, ingen backend, ingen databas — allt körs i webbläsaren
 och pratar direkt med Google Sheets API.
 
@@ -47,6 +49,16 @@ Standardinställningarna i appen matchar layouten ovan rakt av:
 | Spårningsnummer (det som skannas)      | **AB**          | kolumn 28, HYPERLINK-cellens *synliga text* |
 | Artikel (slås ihop med "-")            | **G, H, I**     | kolumn 7–9 |
 | Antal                                  | **J**           | kolumn 10 |
+| Motiv-länk (valfritt)                  | *(av som standard)* | en egen kolumn, se nedan |
+
+**Motiv-länk (valfritt):** har ni en kolumn med en länk per rad — t.ex. en
+`HYPERLINK`-formel till en PDF på Google Drive med tryckmotivet/designen för
+just den artikeln — kan du ange den kolumnen under Inställningar
+("Motiv-länk"). Då visas en **"Se motiv"**-knapp på artikelraden i appen som
+öppnar länken i en ny flik, så man kan verifiera rätt tryck mot pallen.
+Till skillnad från spårningsnumret läser appen här den *underliggande
+URL:en* (inte länktexten), så det spelar ingen roll vad cellen visar för
+text. Lämnas fältet tomt visas ingen motiv-knapp alls.
 
 Stämmer inte dina kolumner exakt med det här (t.ex. om ordernumret ligger i
 en annan kolumn, eller om det bara är 2 artikelkolumner) ändrar du det under
@@ -71,8 +83,12 @@ Viktigt att veta:
   rubrikrad eller har fler.
 - Du behöver **inte** skapa loggfliken själv – appen skapar automatiskt en
   flik (standardnamn **"Skanningar"**) med kolumnerna Tidpunkt,
-  Spårningsnummer, Ordernummer, Antal artikelrader, Status, och lägger till
-  en rad varje gång något skannas.
+  Spårningsnummer, Ordernummer, Antal artikelrader, Status och Saknade
+  artiklar. En rad läggs till varje gång en pall bekräftas (eller när en kod
+  inte hittas alls). Status blir **Fullständig** om alla rader bockats av,
+  **Ofullständig** om någon rad saknades vid bekräftelsen (då listas de
+  saknade artiklarna i sista kolumnen), eller **Ingen träff** om koden inte
+  gick att matcha mot någon order.
 - Kopiera **Sheet-ID** från adressfältet, den långa koden mellan `/d/` och
   `/edit`:
   `https://docs.google.com/spreadsheets/d/`**`DEN_HÄR_KODEN`**`/edit`
@@ -124,16 +140,29 @@ inte att bara dubbelklicka på `index.html`.
 
 ### Enklast: GitHub Pages (gratis)
 
-1. Skapa ett nytt repo på GitHub, t.ex. `ean-skanner`.
-2. Ladda upp alla filer i den här mappen (`index.html`, `style.css`,
-   `app.js`, `manifest.json`, `sw.js`, `icons/`) till repots rot.
-3. Gå till repots **Settings → Pages**, välj **Deploy from branch**, branch
-   `main`, mapp `/root`, spara.
-4. Efter någon minut är appen live på
-   `https://ditt-användarnamn.github.io/ean-skanner/`.
-5. Lägg till exakt den adressen (utan avslutande sökväg, bara
-   `https://ditt-användarnamn.github.io`) under Authorized JavaScript
-   origins i steg 2 om du inte redan gjort det.
+1. Har du inget GitHub-konto: skapa ett gratis på
+   [github.com/signup](https://github.com/signup).
+2. Klicka **+** uppe till höger → **New repository** (eller gå direkt till
+   [github.com/new](https://github.com/new)).
+   - Ge det ett namn, t.ex. `orderskanner`.
+   - Välj **Public** (krävs för gratis GitHub Pages på privata konton).
+   - Klicka **Create repository**.
+3. På repots sida: klicka **Add file → Upload files**. Dra in *alla* filer
+   och mappen `icons/` från den uppackade zip-filen (`index.html`,
+   `style.css`, `app.js`, `manifest.json`, `sw.js`, `icons/`) och klicka
+   **Commit changes**.
+4. Gå till **Settings** (fliken högst upp i repot) → **Pages** i vänstermenyn.
+   Under **Build and deployment → Source**, välj **Deploy from a branch**.
+   Under **Branch**, välj `main` och mappen **`/ (root)`**, klicka **Save**.
+5. Vänta en minut, ladda om sidan – GitHub visar då adressen där appen är
+   live, i formatet
+   `https://ditt-användarnamn.github.io/orderskanner/`.
+6. Lägg till adressen **utan** avslutande sökväg, alltså bara
+   `https://ditt-användarnamn.github.io`, under Authorized JavaScript
+   origins i Google Cloud (steg 2 ovan) om du inte redan gjort det.
+
+> Tips: uppdaterar du filerna senare (t.ex. en ny version av appen) gör du
+> om steg 3 – ladda upp filerna igen så skriver GitHub över de gamla.
 
 ### Alternativ: Netlify eller Vercel
 
@@ -167,15 +196,24 @@ det dags att deploya enligt ovan.
    - Flikarna för orderrader/logg (standard: "Produkter" / "Skanningar")
    - Kolumnerna för Ordernummer, Spårningsnummer, Artikel och Antal, om de
      inte redan matchar standardvärdena (B / AB / G,H,I / J) – se avsnitt 1.
+   - **Motiv-länk** (valfritt) – kolumnen med länk till tryckmotiv/PDF, om ni
+     har en sådan – se avsnitt 1.
 3. Tryck **Logga in med Google** och godkänn åtkomsten.
 4. Högst upp väljer du inmatningskälla:
    - **📷 Kamera** – tryck **Starta kamera** och rikta mot spårningskoden.
+     Kameran pausar automatiskt efter en avläst kod – tryck **"Skanna nästa
+     kod"** när du är redo för nästa.
    - **🔫 Extern skanner** – för handdatorer med inbyggd skanner (se avsnitt 5
      nedan om du kör på en Cipherlab).
-   Träff visar ordernumret och en lista på ordens artiklar (artikel + antal),
-   och skanningen loggas i arket. Läser skannern fel, eller vill du testa
-   en kod manuellt? Använd **"Ange spårningsnummer manuellt"** längst ner
-   istället.
+   En träff visar ordernumret och en lista på ordens artiklar (artikel +
+   antal), var och en med en kryssruta. Finns en motiv-länk för raden visas
+   även en **"Se motiv"**-knapp som öppnar den (t.ex. en PDF på Drive) i en
+   ny flik, så du kan verifiera rätt tryck. Bocka av varje rad i takt med
+   att du räknar den på pallen, och tryck sedan **"Bekräfta pall"** – först
+   då loggas resultatet i arket, som **Fullständig** om allt bockats av
+   eller **Ofullständig** (med de saknade artiklarna listade) om inte.
+   Läser skannern fel, eller vill du testa en kod manuellt? Använd
+   **"Ange spårningsnummer manuellt"** längst ner istället.
 
 ---
 

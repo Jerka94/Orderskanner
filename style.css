@@ -283,6 +283,13 @@ main {
   letter-spacing: .02em;
 }
 
+.result-progress {
+  margin: 0 0 .6rem;
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
 .result-lines {
   list-style: none;
   margin: 0;
@@ -296,26 +303,71 @@ main {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: .8rem;
+  gap: .6rem;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: .6rem .8rem;
+  padding: .55rem .7rem;
+  transition: background .15s, border-color .15s;
+}
+.result-line.checked {
+  background: rgba(52,211,153,.1);
+  border-color: var(--ok);
+}
+
+.rl-check {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.rl-check input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--ok);
 }
 .rl-label {
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: .92rem;
+  overflow-wrap: anywhere;
 }
+.result-line.checked .rl-label {
+  color: var(--ok);
+}
+
+.rl-motiv {
+  flex-shrink: 0;
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: .2rem .55rem;
+  white-space: nowrap;
+}
+.rl-motiv:active { background: rgba(79,140,255,.15); }
+
 .rl-qty {
   font-weight: 700;
   color: var(--accent);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .result-line-empty {
   color: var(--text-dim);
   font-size: .9rem;
 }
+
+.confirm-row { margin-top: 1rem; }
+.confirm-row .btn { width: 100%; }
+
+.badge.pending { background: rgba(251,191,36,.15); color: var(--warn); }
+.badge.incomplete { background: rgba(251,191,36,.15); color: var(--warn); }
 
 .result-note {
   margin: .8rem 0 0;
@@ -359,6 +411,7 @@ main {
 .history-item .hi-ean { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: .8rem; }
 .history-item .hi-time { color: var(--text-dim); font-size: .78rem; white-space: nowrap; }
 .history-item.nomatch .hi-name { color: var(--danger); }
+.history-item.incomplete .hi-name { color: var(--warn); }
 
 .modal {
   border: 1px solid var(--border);

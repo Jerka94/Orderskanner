@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Orderskanner</title>
+<meta name="theme-color" content="#0f172a">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-icon">▥</span>
+    <span>Orderskanner</span>
+  </div>
+  <div class="topbar-actions">
+    <button id="settingsBtn" class="icon-btn" title="Inställningar" aria-label="Inställningar">⚙</button>
+    <div id="authArea"></div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Status / onboarding banner -->
+  <section id="statusBanner" class="banner" hidden></section>
+
+  <!-- Input mode switcher -->
+  <section class="card mode-switch-card">
+    <div class="mode-switch" role="tablist" aria-label="Skanningskälla">
+      <button id="modeCameraBtn" class="mode-btn" data-mode="camera" role="tab">📷 Kamera</button>
+      <button id="modeWedgeBtn" class="mode-btn" data-mode="wedge" role="tab">🔫 Extern skanner</button>
+    </div>
+  </section>
+
+  <!-- Camera scanner card -->
+  <section id="cameraPanel" class="card scanner-card">
+    <div id="reader" class="reader"></div>
+    <div class="scan-controls">
+      <button id="startScanBtn" class="btn btn-primary">Starta kamera</button>
+      <button id="stopScanBtn" class="btn btn-ghost" hidden>Stäng kamera</button>
+      <button id="torchBtn" class="btn btn-ghost" hidden>Lampa</button>
+    </div>
+  </section>
+
+  <!-- External hardware scanner (keyboard-wedge) card, e.g. Cipherlab handdatorer -->
+  <section id="wedgePanel" class="card wedge-card" hidden>
+    <div class="wedge-header">
+      <h2>Extern skanner</h2>
+      <span id="wedgeStatus" class="badge armed pulsing">Redo</span>
+    </div>
+    <p class="wedge-hint">
+      Tryck på avtryckaren på handdatorn (t.ex. Cipherlab) för att läsa av en kod.
+      Fältet nedan tar automatiskt emot inmatningen – ingen knapptryckning behövs.
+    </p>
+    <input id="wedgeInput" class="wedge-input" type="text" inputmode="none"
+           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+           aria-label="Skannerinmatning (extern skanner)">
+  </section>
+
+  <!-- Manual entry (always available, regardless of mode) -->
+  <section class="card manual-card">
+    <details class="manual-entry">
+      <summary>Ange spårningsnummer manuellt</summary>
+      <form id="manualForm" class="manual-form">
+        <input id="manualInput" type="text" inputmode="text" placeholder="T.ex. 24544947934SE" autocomplete="off">
+        <button type="submit" class="btn btn-primary">Slå upp</button>
+      </form>
+    </details>
+  </section>
+
+  <!-- Result card -->
+  <section id="resultCard" class="card result-card" hidden>
+    <div class="result-header">
+      <h2 id="resultTitle">Resultat</h2>
+      <span id="resultBadge" class="badge"></span>
+    </div>
+    <div class="result-meta">
+      <div class="result-meta-item">
+        <span class="meta-label">Spårningsnummer</span>
+        <span id="resultTracking" class="meta-value"></span>
+      </div>
+      <div class="result-meta-item">
+        <span class="meta-label">Ordernummer</span>
+        <span id="resultOrder" class="meta-value"></span>
+      </div>
+    </div>
+    <ul id="resultLines" class="result-lines"></ul>
+    <p id="resultNote" class="result-note"></p>
+  </section>
+
+  <!-- Recent scans -->
+  <section class="card history-card">
+    <div class="history-header">
+      <h2>Senaste skanningar</h2>
+      <button id="clearHistoryBtn" class="link-btn">Rensa</button>
+    </div>
+    <ul id="historyList" class="history-list">
+      <li class="history-empty">Inga skanningar ännu.</li>
+    </ul>
+  </section>
+
+</main>
+
+<!-- Settings modal -->
+<dialog id="settingsModal" class="modal">
+  <form method="dialog" class="modal-content" id="settingsForm">
+    <h2>Inställningar</h2>
+
+    <label class="field">
+      <span>Google OAuth-klient-ID</span>
+      <input id="clientIdInput" type="text" placeholder="xxxxxxxx.apps.googleusercontent.com">
+      <small>Skapas i Google Cloud Console, se README.</small>
+    </label>
+
+    <label class="field">
+      <span>Google Sheet-ID</span>
+      <input id="spreadsheetIdInput" type="text" placeholder="Hittas i arkets URL">
+      <small>Den långa koden i sheets-länken mellan /d/ och /edit.</small>
+    </label>
+
+    <label class="field">
+      <span>Flik med orderrader</span>
+      <input id="productSheetInput" type="text" placeholder="Produkter" value="Produkter">
+      <small>Fliken där varje rad är en artikelrad i en order.</small>
+    </label>
+
+    <label class="field">
+      <span>Flik för skanningslogg</span>
+      <input id="logSheetInput" type="text" placeholder="Skanningar" value="Skanningar">
+      <small>Skapas automatiskt om den saknas.</small>
+    </label>
+
+    <label class="field">
+      <span>Standardläge vid start</span>
+      <select id="defaultModeInput">
+        <option value="camera">Kamera</option>
+        <option value="wedge">Extern skanner (t.ex. Cipherlab)</option>
+      </select>
+      <small>Vilket läge appen öppnar i nästa gång du startar den på den här enheten.</small>
+    </label>
+
+    <h3 class="field-group-title">Kolumner i orderfliken</h3>
+    <p class="field-group-hint">Ange kolumnbokstäver som i kalkylarket (A, B, … AA, AB …).</p>
+
+    <div class="field-row">
+      <label class="field">
+        <span>Ordernummer</span>
+        <input id="orderColInput" type="text" placeholder="B" value="B">
+      </label>
+      <label class="field">
+        <span>Spårningsnummer</span>
+        <input id="trackingColInput" type="text" placeholder="AB" value="AB">
+      </label>
+    </div>
+
+    <label class="field">
+      <span>Artikelkolumner (slås ihop med "-")</span>
+      <input id="articleColsInput" type="text" placeholder="G,H,I" value="G,H,I">
+      <small>Kommaseparerade kolumnbokstäver, t.ex. G,H,I.</small>
+    </label>
+
+    <div class="field-row">
+      <label class="field">
+        <span>Antal</span>
+        <input id="qtyColInput" type="text" placeholder="J" value="J">
+      </label>
+      <label class="field">
+        <span>Data börjar på rad</span>
+        <input id="dataStartRowInput" type="number" min="1" placeholder="2" value="2">
+      </label>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" id="cancelSettingsBtn" class="btn btn-ghost">Avbryt</button>
+      <button type="submit" id="saveSettingsBtn" class="btn btn-primary">Spara</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

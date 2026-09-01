@@ -2,7 +2,7 @@
  * and works offline for the UI itself (scanning/matching still needs
  * network for Google Sheets, but the app will at least load). */
 
-const CACHE_NAME = "ean-scanner-v1";
+const CACHE_NAME = "ean-scanner-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -39,18 +39,19 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // Network-first: always try to get the latest version when online (this
+  // app needs network for Google Sheets anyway), and only fall back to the
+  // cached copy when the network request fails (offline). This way a new
+  // deploy shows up on the very next reload instead of one reload behind.
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const network = fetch(event.request)
-        .then((res) => {
-          if (res && res.ok) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || network;
-    })
+    fetch(event.request)
+      .then((res) => {
+        if (res && res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
+        return res;
+      })
+      .catch(() => caches.match(event.request))
   );
 });

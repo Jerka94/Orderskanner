@@ -39,7 +39,11 @@
   <!-- Camera scanner card -->
   <section id="cameraPanel" class="card scanner-card">
     <div id="reader" class="reader"></div>
+    <p id="cameraPausedHint" class="camera-paused-hint" hidden>
+      Kod avläst – kameran är pausad. Tryck "Skanna nästa" för att fortsätta.
+    </p>
     <div class="scan-controls">
+      <button id="scanNextBtn" class="btn btn-primary" hidden>Skanna nästa kod</button>
       <button id="startScanBtn" class="btn btn-primary">Starta kamera</button>
       <button id="stopScanBtn" class="btn btn-ghost" hidden>Stäng kamera</button>
       <button id="torchBtn" class="btn btn-ghost" hidden>Lampa</button>

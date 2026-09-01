@@ -50,6 +50,7 @@ let currentUser = null;
 
 let html5QrCode = null;
 let cameraRunning = false;
+let cameraPaused = false;
 let torchOn = false;
 
 let orderIndex = null;        // { trackingToOrder: Map<code,orderNumber>, ordersByNumber: Map<orderNumber,Order> }
@@ -87,6 +88,8 @@ const wedgeInput = el("wedgeInput");
 
 const startScanBtn = el("startScanBtn");
 const stopScanBtn = el("stopScanBtn");
+const scanNextBtn = el("scanNextBtn");
+const cameraPausedHint = el("cameraPausedHint");
 const torchBtn = el("torchBtn");
 const manualForm = el("manualForm");
 const manualInput = el("manualInput");
@@ -742,18 +745,55 @@ async function startCamera() {
     await html5QrCode.start(
       { facingMode: "environment" },
       { fps: 10, qrbox: (vw, vh) => ({ width: Math.min(320, vw * 0.85), height: Math.min(160, vh * 0.5) }) },
-      (decodedText) => handleScannedCode(decodedText, { fromCamera: true }),
+      (decodedText) => {
+        // Single-shot: ignore further decodes until the user explicitly
+        // resumes (via "Skanna nästa kod") — otherwise the same frame
+        // keeps re-triggering scans every cooldown period.
+        if (!cameraRunning || cameraPaused) return;
+        pauseCameraAfterScan();
+        handleScannedCode(decodedText, { fromCamera: true });
+      },
       () => {} // per-frame decode failures are expected & noisy; ignore
     );
     cameraRunning = true;
+    cameraPaused = false;
     startScanBtn.hidden = true;
     stopScanBtn.hidden = false;
+    scanNextBtn.hidden = true;
+    cameraPausedHint.hidden = true;
     maybeShowTorchButton();
   } catch (err) {
     console.error(err);
     showToast("Kunde inte starta kameran: " + (err.message || err), "error");
   }
 }
+
+/** Freezes the camera decode loop right after a scan, until the user taps "Skanna nästa kod". */
+function pauseCameraAfterScan() {
+  if (!html5QrCode || cameraPaused) return;
+  cameraPaused = true;
+  try {
+    html5QrCode.pause(true);
+  } catch (err) {
+    console.warn("Kunde inte pausa kameran", err);
+  }
+  scanNextBtn.hidden = false;
+  cameraPausedHint.hidden = false;
+}
+
+function resumeCameraScanning() {
+  if (!html5QrCode || !cameraPaused) return;
+  try {
+    html5QrCode.resume();
+  } catch (err) {
+    console.warn("Kunde inte återuppta kameran", err);
+  }
+  cameraPaused = false;
+  scanNextBtn.hidden = true;
+  cameraPausedHint.hidden = true;
+}
+
+scanNextBtn.addEventListener("click", resumeCameraScanning);
 
 async function stopCamera() {
   if (!cameraRunning || !html5QrCode) return;
@@ -764,9 +804,12 @@ async function stopCamera() {
     console.warn(err);
   }
   cameraRunning = false;
+  cameraPaused = false;
   torchOn = false;
   startScanBtn.hidden = false;
   stopScanBtn.hidden = true;
+  scanNextBtn.hidden = true;
+  cameraPausedHint.hidden = true;
   torchBtn.hidden = true;
 }
 

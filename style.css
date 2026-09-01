@@ -102,6 +102,16 @@ main {
   background: #000;
 }
 
+.camera-paused-hint {
+  margin: .7rem 0 0;
+  padding: .6rem .8rem;
+  background: rgba(79,140,255,.12);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  font-size: .88rem;
+  color: var(--text);
+}
+
 .scan-controls {
   display: flex;
   gap: .6rem;

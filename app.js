@@ -612,16 +612,14 @@ async function appendLogRow(code, order, complete, missingLabels) {
 }
 
 /**
- * Writes one status text PER ARTIKELRAD into the configured status column
- * (t.ex. Y) – bara på rader som hör till DEN HÄR specifika ordern, aldrig
- * andra ordrars rader längre ner/upp i samma flik.
- *
- * Varje rad (via lines[].rowNumbers) får sin egen status beroende på om
- * just den artikeln bockades av eller inte:
- *  - avbockad  -> "Utlev"
- *  - inte avbockad (saknas) -> "Ofullständig"
+ * Writes "Utlev" into the configured status column (t.ex. Y), men BARA på
+ * raderna för de artiklar som faktiskt bockades av – aldrig andra ordrars
+ * rader, och inte heller på rader för artiklar som saknades. En saknad
+ * artikels rad(er) lämnas orörda i statuskolumnen (ingen "Ofullständig"
+ * skrivs där) – man ser ändå att den saknas via "Status innan"-texten och
+ * ordens status i loggfliken, och kan följa upp manuellt i arket.
  * En artikel som legat på flera rader (samma artikel-nyckel, summerad
- * kvantitet) får samma status på alla sina rader.
+ * kvantitet) får "Utlev" på alla sina rader.
  */
 async function writeLineStatuses(order, lines, checked) {
   if (!settings.statusCol || !order || !lines || lines.length === 0) return;
@@ -630,9 +628,9 @@ async function writeLineStatuses(order, lines, checked) {
   const sheetRef = rawSheetRef(settings.productSheet);
   const data = [];
   lines.forEach((line) => {
-    const statusText = checked.has(line.label) ? "Utlev" : "Ofullständig";
+    if (!checked.has(line.label)) return; // saknad rad - lämna statuskolumnen orörd
     (line.rowNumbers || []).forEach((rowNum) => {
-      data.push({ range: `${sheetRef}!${col}${rowNum}`, values: [[statusText]] });
+      data.push({ range: `${sheetRef}!${col}${rowNum}`, values: [["Utlev"]] });
     });
   });
   if (data.length === 0) return;

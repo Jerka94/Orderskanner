@@ -39,6 +39,7 @@ const DEFAULT_SETTINGS = {
   qtyCol: "J",
   dataStartRow: "2",
   motivCol: "",
+  statusCol: "",
 };
 
 /* ---------------- State ---------------- */
@@ -84,6 +85,7 @@ const articleColsInput = el("articleColsInput");
 const qtyColInput = el("qtyColInput");
 const dataStartRowInput = el("dataStartRowInput");
 const motivColInput = el("motivColInput");
+const statusColInput = el("statusColInput");
 
 const modeCameraBtn = el("modeCameraBtn");
 const modeWedgeBtn = el("modeWedgeBtn");
@@ -132,6 +134,7 @@ function loadSettings() {
       qtyCol: parsed.qtyCol || DEFAULT_SETTINGS.qtyCol,
       dataStartRow: parsed.dataStartRow || DEFAULT_SETTINGS.dataStartRow,
       motivCol: parsed.motivCol || "",
+      statusCol: parsed.statusCol || "",
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -197,6 +200,7 @@ settingsBtn.addEventListener("click", () => {
   qtyColInput.value = settings.qtyCol;
   dataStartRowInput.value = settings.dataStartRow;
   motivColInput.value = settings.motivCol;
+  statusColInput.value = settings.statusCol;
   settingsModal.showModal();
 });
 
@@ -222,6 +226,7 @@ settingsForm.addEventListener("submit", (e) => {
     qtyCol: qtyColInput.value.trim() || DEFAULT_SETTINGS.qtyCol,
     dataStartRow: dataStartRowInput.value.trim() || DEFAULT_SETTINGS.dataStartRow,
     motivCol: motivColInput.value.trim(), // optional, empty = feature off
+    statusCol: statusColInput.value.trim(), // optional, empty = feature off
   };
   const clientChanged = next.clientId !== settings.clientId;
   saveSettings(next);
@@ -533,10 +538,25 @@ async function ensureLogSheet() {
         requests: [{ addSheet: { properties: { title: settings.logSheet } } }],
       }),
     });
-    await sheetsFetch(`/${id}/values/${a1(settings.logSheet)}!A1:F1?valueInputOption=RAW`, {
+    await sheetsFetch(`/${id}/values/${a1(settings.logSheet)}!A1:G1?valueInputOption=RAW`, {
       method: "PUT",
-      body: JSON.stringify({ values: [["Tidpunkt", "Spårningsnummer", "Ordernummer", "Antal artikelrader", "Status", "Saknade artiklar"]] }),
+      body: JSON.stringify({ values: [["Tidpunkt", "Spårningsnummer", "Ordernummer", "Antal artikelrader", "Status", "Saknade artiklar", "Utförd av"]] }),
     });
+  } else {
+    // Fliken fanns redan (t.ex. skapad av en äldre version av appen utan
+    // "Utförd av"-kolumnen) - komplettera bara rubriken i G1 om den saknas,
+    // rör inget annat.
+    try {
+      const g1 = await sheetsFetch(`/${id}/values/${a1(settings.logSheet)}!G1`);
+      if (!g1.values || !g1.values[0] || !g1.values[0][0]) {
+        await sheetsFetch(`/${id}/values/${a1(settings.logSheet)}!G1?valueInputOption=RAW`, {
+          method: "PUT",
+          body: JSON.stringify({ values: [["Utförd av"]] }),
+        });
+      }
+    } catch (err) {
+      console.warn("Kunde inte kontrollera/uppdatera loggflikens rubrik", err);
+    }
   }
   logSheetEnsured = true;
 }
@@ -555,6 +575,7 @@ async function appendLogRow(code, order, complete, missingLabels) {
   if (!order) status = "Ingen träff";
   else status = complete ? "Fullständig" : "Ofullständig";
   const missingText = order && !complete && missingLabels ? missingLabels.join("; ") : "";
+  const scannedBy = currentUser ? (currentUser.name || currentUser.email || "") : "";
   const values = [[
     new Date().toLocaleString("sv-SE"),
     code,
@@ -562,11 +583,34 @@ async function appendLogRow(code, order, complete, missingLabels) {
     order ? String(lines.length) : "0",
     status,
     missingText,
+    scannedBy,
   ]];
   await sheetsFetch(
-    `/${id}/values/${a1(settings.logSheet)}!A:F:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+    `/${id}/values/${a1(settings.logSheet)}!A:G:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
     { method: "POST", body: JSON.stringify({ values }) }
   );
+}
+
+/**
+ * Writes one status text into the configured status column (t.ex. Y), on
+ * every rad som hör till DEN HÄR specifika ordern (order.rowNumbers) — och
+ * bara den. Andra ordrars rader längre ner/upp i samma flik rörs aldrig.
+ * "Ofullständig" skrivs om pallen inte var komplett, annars skrivs
+ * statusText (t.ex. "Utlev") på ordens samtliga rader.
+ */
+async function writeOrderStatusColumn(order, statusText) {
+  if (!settings.statusCol || !order || !order.rowNumbers || order.rowNumbers.length === 0) return;
+  const id = settings.spreadsheetId;
+  const col = settings.statusCol.trim().toUpperCase();
+  const sheetRef = rawSheetRef(settings.productSheet);
+  const data = order.rowNumbers.map((rowNum) => ({
+    range: `${sheetRef}!${col}${rowNum}`,
+    values: [[statusText]],
+  }));
+  await sheetsFetch(`/${id}/values:batchUpdate`, {
+    method: "POST",
+    body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
+  });
 }
 
 /* ---------------- Scan handling (shared by camera + manual entry) ---------------- */
@@ -722,13 +766,14 @@ confirmPalletBtn.addEventListener("click", async () => {
   confirmPalletBtn.disabled = true;
   try {
     await appendLogRow(code, order, complete, missing);
+    await writeOrderStatusColumn(order, complete ? "Utlev" : "Ofullständig");
     showToast(
       complete ? "Pall bekräftad – fullständig." : `Pall bekräftad – ofullständig (${missing.length} rad(er) saknas).`,
       complete ? "success" : "error"
     );
   } catch (err) {
     console.error(err);
-    showToast("Kunde inte logga till arket.", "error");
+    showToast("Kunde inte logga/uppdatera arket.", "error");
   } finally {
     confirmPalletBtn.disabled = false;
   }

@@ -188,6 +188,12 @@
       <small>Kolumn med en länk (t.ex. HYPERLINK till en PDF på Drive) som visas som "Se motiv" på artikelraden. Lämna tomt om ni inte har detta.</small>
     </label>
 
+    <label class="field">
+      <span>Statuskolumn i orderraderna (valfritt)</span>
+      <input id="statusColInput" type="text" placeholder="T.ex. Y">
+      <small>Vid "Bekräfta pall" skrivs "Ofullständig" (om något saknades) eller "Utlev" (om allt bockats av) i den här kolumnen – på ordens samtliga rader, aldrig andra ordrars rader. Lämna tomt för att inte skriva någon statuskolumn.</small>
+    </label>
+
     <div class="modal-actions">
       <button type="button" id="cancelSettingsBtn" class="btn btn-ghost">Avbryt</button>
       <button type="submit" id="saveSettingsBtn" class="btn btn-primary">Spara</button>

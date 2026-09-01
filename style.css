@@ -301,9 +301,8 @@ main {
 
 .result-line {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: .6rem;
+  flex-direction: column;
+  gap: .3rem;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -313,6 +312,19 @@ main {
 .result-line.checked {
   background: rgba(52,211,153,.1);
   border-color: var(--ok);
+}
+
+.rl-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .6rem;
+}
+
+.rl-prev {
+  font-size: .76rem;
+  color: var(--text-dim);
+  padding-left: 2.2rem; /* align under the label, past the checkbox */
 }
 
 .rl-check {

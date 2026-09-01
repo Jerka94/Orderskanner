@@ -440,11 +440,15 @@ async function fetchColumnHyperlinks(sheetName, colLetter) {
 /**
  * Loads the order/line-item sheet into memory and builds two lookups:
  *  - trackingToOrder: spårningsnummer (t.ex. från en HYPERLINK-cell) -> ordernummer
- *  - ordersByNumber:  ordernummer -> { orderNumber, lineMap: Map<label,{qty,motivUrl}>, rowNumbers }
- * Rows with the same order number are grouped, and rows sharing the exact
- * same artikel-nyckel (kolumn 7-9 hopslagna) within an order have sitt
- * antal summerat. Om en motiv-länkkolumn är satt hämtas även den PDF-länk
- * (t.ex. till Drive) som hör till varje artikelrad.
+ *  - ordersByNumber:  ordernummer -> { orderNumber, lineMap: Map<label,{qty,motivUrl,rowNumbers,prevStatuses}>, rowNumbers }
+ * Rows with the same order number are grouped, and rows sharing den exakta
+ * artikel-nyckeln (kolumn 7-9 hopslagna) inom en order har sitt antal
+ * summerat OCH sina radnummer samlade tillsammans (så att en artikel som
+ * ligger på flera rader ändå kan få sin status skriven på alla de raderna).
+ * Om en motiv-länkkolumn är satt hämtas även den PDF-länk (t.ex. till
+ * Drive) som hör till varje artikelrad. Om en statuskolumn är satt läses
+ * även dess NUVARANDE värde per rad in (prevStatuses), så appen kan visa
+ * vilken status raderna hade innan pallen bekräftas.
  */
 async function loadOrderIndex(force = false) {
   if (orderIndex && !force && Date.now() - orderIndexLoadedAt < 5 * 60 * 1000) {
@@ -467,6 +471,7 @@ async function loadOrderIndex(force = false) {
     .map((s) => colLetterToIndex(s))
     .filter((n) => n >= 0);
   const qtyCol = colLetterToIndex(settings.qtyCol);
+  const statusCol = settings.statusCol ? colLetterToIndex(settings.statusCol) : -1;
   const startRow = Math.max(1, parseInt(settings.dataStartRow, 10) || 2) - 1; // zero-based
 
   if (orderCol < 0 || trackingCol < 0 || articleCols.length === 0 || qtyCol < 0) {
@@ -487,23 +492,31 @@ async function loadOrderIndex(force = false) {
       .filter(Boolean)
       .join("-");
     const qty = parseQtyValue(row[qtyCol]);
+    const rowNum = i + 1;
 
     if (!ordersByNumber.has(orderNumber)) {
       ordersByNumber.set(orderNumber, { orderNumber, lineMap: new Map(), rowNumbers: [] });
     }
     const order = ordersByNumber.get(orderNumber);
-    order.rowNumbers.push(i + 1);
+    order.rowNumbers.push(rowNum);
 
     if (tracking && !trackingToOrder.has(tracking)) {
       trackingToOrder.set(tracking, orderNumber);
     }
     if (articleLabel) {
-      if (!order.lineMap.has(articleLabel)) order.lineMap.set(articleLabel, { qty: 0, motivUrl: null });
+      if (!order.lineMap.has(articleLabel)) {
+        order.lineMap.set(articleLabel, { qty: 0, motivUrl: null, rowNumbers: [], prevStatuses: [] });
+      }
       const entry = order.lineMap.get(articleLabel);
       entry.qty += qty;
+      entry.rowNumbers.push(rowNum);
       if (!entry.motivUrl) {
         const link = motivLinks.get(i);
         if (link) entry.motivUrl = link;
+      }
+      if (statusCol >= 0) {
+        const prev = (row[statusCol] || "").toString().trim();
+        if (prev) entry.prevStatuses.push(prev);
       }
     }
   }
@@ -517,7 +530,14 @@ async function loadOrderIndex(force = false) {
 function orderLines(order) {
   if (!order) return [];
   return Array.from(order.lineMap.entries())
-    .map(([label, v]) => ({ label, qty: v.qty, motivUrl: v.motivUrl || null }))
+    .map(([label, v]) => ({
+      label,
+      qty: v.qty,
+      motivUrl: v.motivUrl || null,
+      rowNumbers: v.rowNumbers,
+      // Distinkta tidigare statusvärden, i den ordning de sågs (oftast bara ett).
+      prevStatus: Array.from(new Set(v.prevStatuses)).join(" / "),
+    }))
     .sort((a, b) => a.label.localeCompare(b.label, "sv"));
 }
 
@@ -592,21 +612,30 @@ async function appendLogRow(code, order, complete, missingLabels) {
 }
 
 /**
- * Writes one status text into the configured status column (t.ex. Y), on
- * every rad som hör till DEN HÄR specifika ordern (order.rowNumbers) — och
- * bara den. Andra ordrars rader längre ner/upp i samma flik rörs aldrig.
- * "Ofullständig" skrivs om pallen inte var komplett, annars skrivs
- * statusText (t.ex. "Utlev") på ordens samtliga rader.
+ * Writes one status text PER ARTIKELRAD into the configured status column
+ * (t.ex. Y) – bara på rader som hör till DEN HÄR specifika ordern, aldrig
+ * andra ordrars rader längre ner/upp i samma flik.
+ *
+ * Varje rad (via lines[].rowNumbers) får sin egen status beroende på om
+ * just den artikeln bockades av eller inte:
+ *  - avbockad  -> "Utlev"
+ *  - inte avbockad (saknas) -> "Ofullständig"
+ * En artikel som legat på flera rader (samma artikel-nyckel, summerad
+ * kvantitet) får samma status på alla sina rader.
  */
-async function writeOrderStatusColumn(order, statusText) {
-  if (!settings.statusCol || !order || !order.rowNumbers || order.rowNumbers.length === 0) return;
+async function writeLineStatuses(order, lines, checked) {
+  if (!settings.statusCol || !order || !lines || lines.length === 0) return;
   const id = settings.spreadsheetId;
   const col = settings.statusCol.trim().toUpperCase();
   const sheetRef = rawSheetRef(settings.productSheet);
-  const data = order.rowNumbers.map((rowNum) => ({
-    range: `${sheetRef}!${col}${rowNum}`,
-    values: [[statusText]],
-  }));
+  const data = [];
+  lines.forEach((line) => {
+    const statusText = checked.has(line.label) ? "Utlev" : "Ofullständig";
+    (line.rowNumbers || []).forEach((rowNum) => {
+      data.push({ range: `${sheetRef}!${col}${rowNum}`, values: [[statusText]] });
+    });
+  });
+  if (data.length === 0) return;
   await sheetsFetch(`/${id}/values:batchUpdate`, {
     method: "POST",
     body: JSON.stringify({ valueInputOption: "USER_ENTERED", data }),
@@ -707,6 +736,9 @@ function renderResult(code, order) {
         const li = document.createElement("li");
         li.className = "result-line";
 
+        const top = document.createElement("div");
+        top.className = "rl-top";
+
         const check = document.createElement("label");
         check.className = "rl-check";
         const cb = document.createElement("input");
@@ -722,7 +754,7 @@ function renderResult(code, order) {
         label.textContent = line.label;
         check.appendChild(cb);
         check.appendChild(label);
-        li.appendChild(check);
+        top.appendChild(check);
 
         if (line.motivUrl) {
           const a = document.createElement("a");
@@ -731,13 +763,22 @@ function renderResult(code, order) {
           a.rel = "noopener";
           a.className = "rl-motiv";
           a.textContent = "Se motiv";
-          li.appendChild(a);
+          top.appendChild(a);
         }
 
         const qty = document.createElement("span");
         qty.className = "rl-qty";
         qty.textContent = formatQty(line.qty) + " st";
-        li.appendChild(qty);
+        top.appendChild(qty);
+
+        li.appendChild(top);
+
+        if (line.prevStatus) {
+          const prev = document.createElement("div");
+          prev.className = "rl-prev";
+          prev.textContent = "Status innan: " + line.prevStatus;
+          li.appendChild(prev);
+        }
 
         resultLines.appendChild(li);
       });
@@ -766,7 +807,9 @@ confirmPalletBtn.addEventListener("click", async () => {
   confirmPalletBtn.disabled = true;
   try {
     await appendLogRow(code, order, complete, missing);
-    await writeOrderStatusColumn(order, complete ? "Utlev" : "Ofullständig");
+    // Skriver status per artikelrad: avbockade rader -> "Utlev",
+    // saknade rader -> "Ofullständig" - inte samma status på alla rader.
+    await writeLineStatuses(order, lines, checkedLines);
     showToast(
       complete ? "Pall bekräftad – fullständig." : `Pall bekräftad – ofullständig (${missing.length} rad(er) saknas).`,
       complete ? "success" : "error"
@@ -782,6 +825,7 @@ confirmPalletBtn.addEventListener("click", async () => {
   checkedLines = new Set();
   confirmRow.hidden = true;
   resultProgress.hidden = true;
+  resultCard.hidden = true;
 
   if (currentMode === "camera" && cameraPaused) resumeCameraScanning();
 });
